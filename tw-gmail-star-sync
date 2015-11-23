@@ -8,6 +8,8 @@ require 'google/api_client/auth/storages/file_store'
 require 'fileutils'
 require 'pry'
 
+TASK_ADD_EXTRAS = '+email proj:work'
+
 APPLICATION_NAME = 'Gmail Star Sync'
 CLIENT_SECRETS_PATH = 'client_secret.json'
 CREDENTIALS_PATH = File.join(Dir.home, '.credentials',
@@ -85,7 +87,7 @@ end
 
 def add_task(subject)
   puts "Creating task"
-  `task add proj:work +email -- '#{subject}'`
+  `task add #{TASK_ADD_EXTRAS} -- '#{subject}'`
   get_task_uuid(subject)
 end
 
