@@ -1,0 +1,152 @@
+#!/usr/bin/env ruby
+
+require 'google/api_client'
+require 'google/api_client/client_secrets'
+require 'google/api_client/auth/installed_app'
+require 'google/api_client/auth/storage'
+require 'google/api_client/auth/storages/file_store'
+require 'fileutils'
+require 'pry'
+
+APPLICATION_NAME = 'Gmail Star Sync'
+CLIENT_SECRETS_PATH = 'client_secret.json'
+CREDENTIALS_PATH = File.join(Dir.home, '.credentials',
+                             "gmail-star-sync.json")
+# SCOPE = 'https://www.googleapis.com/auth/gmail.readonly'
+# SCOPE = 'https://www.googleapis.com/auth/gmail.labels'
+SCOPE = 'https://www.googleapis.com/auth/gmail.modify'
+
+##
+# Ensure valid credentials, either by restoring from the saved credentials
+# files or intitiating an OAuth2 authorization request via InstalledAppFlow.
+# If authorization is required, the user's default browser will be launched
+# to approve the request.
+#
+# @return [Signet::OAuth2::Client] OAuth2 credentials
+def authorize
+  FileUtils.mkdir_p(File.dirname(CREDENTIALS_PATH))
+
+  file_store = Google::APIClient::FileStore.new(CREDENTIALS_PATH)
+  storage = Google::APIClient::Storage.new(file_store)
+  auth = storage.authorize
+
+  if auth.nil? || (auth.expired? && auth.refresh_token.nil?)
+    app_info = Google::APIClient::ClientSecrets.load(CLIENT_SECRETS_PATH)
+    flow = Google::APIClient::InstalledAppFlow.new({
+      client_id: app_info.client_id,
+      client_secret: app_info.client_secret,
+      scope: SCOPE})
+    auth = flow.authorize(storage)
+    puts "Credentials saved to #{CREDENTIALS_PATH}" unless auth.nil?
+  end
+  auth
+end
+
+
+def get_starred_threads
+  puts "Loading starred threads"
+  results = $client.execute!(
+    api_method: $gmail_api.users.threads.list,
+    parameters: {
+      userId: 'me',
+      labelIds: [ "STARRED" ]
+      })
+
+  threads = results.data.threads
+end
+
+def process_threads(threads)
+  threads.map do |thread|
+    t = $client.execute!(
+      api_method: $gmail_api.users.threads.get,
+      parameters: {
+        userId: 'me',
+        id: thread.id
+      }
+    )
+    subject = t.data.messages.first.payload.headers.
+      select{|h| h.name == "Subject" }.
+      map{|h| h.value}.
+      first
+    subject.gsub!("'","")
+    puts "Loaded thread: #{subject}"
+    { id: thread.id, subject: subject }
+  end
+end
+
+def get_task_uuid(subject)
+  puts "running: task description.is:'#{subject}' uuids"
+  uuid = `task description.is:'#{subject}' uuids`.chomp
+end
+
+def get_task_status(uuid)
+  `task _get #{uuid}.status`.chomp
+end
+
+def add_task(subject)
+  puts "Creating task"
+  `task add proj:work +email -- '#{subject}'`
+  get_task_uuid(subject)
+end
+
+def unstar_thread(thread_id)
+  $client.execute!(
+    api_method: $gmail_api.users.threads.modify,
+    parameters: {
+      userId: 'me',
+      id: thread_id,
+    },
+    body_object: {
+      addLabelIds: [],
+      removeLabelIds: [ "STARRED" ]
+    }
+  )
+end
+
+def mark_task_done(uuid)
+  `task #{uuid} done`
+  puts "Marked #{uuid} done"
+end
+
+# Initialize the API
+$client = Google::APIClient.new(:application_name => APPLICATION_NAME)
+$client.authorization = authorize
+$gmail_api = $client.discovered_api('gmail', 'v1')
+
+threads = get_starred_threads
+
+threads = process_threads(threads)
+
+# Now go through and add/remove these to TW!
+# * Look for task matching subject (or thread id?)
+# * If done, clear star
+# * if nothing found, create
+
+# Get list of UUIDs for +email tasks
+# If any of these are not on the list, we should mark them as done
+# because they must not be starred anymore!
+
+current_email_uuids = `task status:pending +email uuids`.split(' ')
+new_starred_uuids  = []
+
+threads.each do |thread|
+  id = thread[:id]
+  subject = thread[:subject]
+  puts "Processing thread: #{subject}"
+  uuid = get_task_uuid(subject)
+  if uuid.empty?
+    uuid = add_task(subject)
+  end
+  status = get_task_status(uuid)
+  puts "UUID: #{uuid}\nStatus: #{status}"
+  new_starred_uuids << uuid if status == "pending"
+  if status == 'completed'
+    puts "Task complete, removing star"
+    unstar_thread(id)
+  end
+end
+
+current_email_uuids.each do |uuid|
+  mark_task_done(uuid) unless new_starred_uuids.include?(uuid)
+end
+
