@@ -9,3 +9,10 @@ After setup, throw this sucker in your crontab to run ever now and then. Upon ru
 
 Which is pretty neat. Now I star a message and it magically shows up in my TODO list. If I address the message, I can either un-star it or mark it as done!
 
+You might want to edit the script to add/modify how your tasks get tagged.
+
+TODO
+----
+
+* External config for new-task tags
+
